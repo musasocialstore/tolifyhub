@@ -1,0 +1,1 @@
+{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"admin.php":{"runtime":"vercel-php@0.7.3"},"index.php":{"runtime":"vercel-php@0.7.3"}}}

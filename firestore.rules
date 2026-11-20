@@ -1,0 +1,233 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    //  TolifyHub — Firestore Rules
+    //  ONLY the collections TolifyHub uses. Everything else: deny.
+    //  Collections: users, admins, settings, banners, socialAccounts,
+    //  premiumAccounts, accountPurchases, premiumPurchases,
+    //  walletTransactions, fundRequests, notifications, accountSecrets.
+    //  NO courses / services / SMM / web-dev collections exist here.
+    //
+    //  Principles:
+    //  1. Admin = admins/{uid} doc (active != false) OR email matches
+    //     settings/config.adminEmail.
+    //  2. A user can NEVER raise their own balance. Only admin actions
+    //     (fund approval / manual add) raise it. Purchases only lower it.
+    //  3. Every purchase amount is checked against the real product
+    //     price stored in Firestore — no cheap-price cheating.
+    //  4. accountSecrets (login email/password) are visible ONLY to the
+    //     admin and to the user who bought that exact account.
+    //  5. settings/config is PUBLICLY readable on purpose: it holds only
+    //     public store info (logo URL, WhatsApp number, social links,
+    //     store name). It must load on the login page BEFORE sign-in.
+    //     It holds NO secrets. Only admin can write it.
+    //
+    //  KNOWN LIMIT (same as any rules-only setup): the premium
+    //  pro-rata price (daysLeft/total * originalPrice) depends on the
+    //  current date, so rules check amount <= originalPrice and
+    //  amount > 0 instead of an exact match. The app computes the
+    //  exact price; a Cloud Function would be needed for exact
+    //  server-side enforcement.
+    // ============================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdminDoc() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('active', true) != false;
+    }
+
+    function isAdminEmail() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/settings/config)
+        && request.auth.token.email ==
+           get(/databases/$(database)/documents/settings/config).data.get('adminEmail', '');
+    }
+
+    function isAdmin() {
+      return isAdminDoc() || isAdminEmail();
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isPositiveNumber(v) {
+      return v is number && v > 0;
+    }
+
+    // ---------- USERS ----------
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      // Create own doc on register — locked-down starting fields.
+      allow create: if isOwner(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.balance == 0
+        && request.resource.data.isAdmin == false
+        && request.resource.data.blocked == false;
+      // User may update ONLY safe profile fields — NEVER balance,
+      // isAdmin, blocked or uid.
+      allow update: if isOwner(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys()
+             .hasAny(['balance', 'isAdmin', 'blocked', 'uid']);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- ADMINS ----------
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- SETTINGS ----------
+    // Public store config (logo, WhatsApp, social links, store name).
+    match /settings/config {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- BANNERS (public catalog images) ----------
+    match /banners/{bannerId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---------- SOCIAL ACCOUNTS (for sale) ----------
+    match /socialAccounts/{accountId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- PREMIUM ACCOUNTS (for sale) ----------
+    match /premiumAccounts/{accountId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- ACCOUNT PURCHASES (social + premium, one doc per account) ----------
+    match /accountPurchases/{purchaseId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      // Buyer creates their own purchase. Amount must match the real price:
+      //  - social: amount == socialAccounts price, account not sold
+      //  - premium: 0 < amount <= originalPrice, account not sold
+      //    (exact pro-rata price is computed by the app; see KNOWN LIMIT)
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.accountId == purchaseId
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && (
+          (request.resource.data.type == 'social'
+           && exists(/databases/$(database)/documents/socialAccounts/$(request.resource.data.accountId))
+           && get(/databases/$(database)/documents/socialAccounts/$(request.resource.data.accountId)).data.get('sold', false) == false
+           && request.resource.data.amount ==
+              get(/databases/$(database)/documents/socialAccounts/$(request.resource.data.accountId)).data.price)
+          ||
+          (request.resource.data.type == 'premium'
+           && exists(/databases/$(database)/documents/premiumAccounts/$(request.resource.data.accountId))
+           && get(/databases/$(database)/documents/premiumAccounts/$(request.resource.data.accountId)).data.get('sold', false) == false
+           && request.resource.data.amount <=
+              get(/databases/$(database)/documents/premiumAccounts/$(request.resource.data.accountId)).data.originalPrice)
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- PREMIUM PURCHASES (kept guarded; app records premium
+    //          account buys in accountPurchases with type='premium') ----------
+    match /premiumPurchases/{purchaseId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.accountId is string
+        && exists(/databases/$(database)/documents/premiumAccounts/$(request.resource.data.accountId))
+        && request.resource.data.amount <=
+           get(/databases/$(database)/documents/premiumAccounts/$(request.resource.data.accountId)).data.originalPrice;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- WALLET TRANSACTIONS (append-only ledger) ----------
+    match /walletTransactions/{txnId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      // User may only create DEBIT (purchase) entries for themselves,
+      // with a non-negative balance after.
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.type == 'debit'
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.balanceAfter is number
+        && request.resource.data.balanceAfter >= 0;
+
+      // Admin may create any entry (credits, refunds).
+      allow create: if isAdmin();
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- FUND REQUESTS ----------
+    match /fundRequests/{reqId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0;
+
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ---------- NOTIFICATIONS ----------
+    match /notifications/{notifId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isAdmin();
+
+      // User may ONLY mark their own notification as read.
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- ACCOUNT SECRETS (login email/password of sold accounts) ----------
+    // Readable ONLY by admin, or by the user who bought this exact
+    // account (an accountPurchases doc with this id, owned by them).
+    match /accountSecrets/{secretId} {
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/accountPurchases/$(secretId))
+         && get(/databases/$(database)/documents/accountPurchases/$(secretId)).data.userId == request.auth.uid)
+      );
+      allow write: if isAdmin();
+    }
+
+    // ---------- EVERYTHING ELSE: DENY ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

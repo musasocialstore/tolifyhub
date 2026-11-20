@@ -1,0 +1,62 @@
+// NOTE: NOT DEPLOYED — Cloud Storage is not enabled on tolifyhub-90375
+// (Spark free plan; Storage on new projects needs the paid Blaze plan).
+// TolifyHub images are pasted as URLs instead. Do not publish this file.
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ============================================================
+    //  TolifyHub — Storage Rules
+    //  Images ONLY (profile photos, store logo, account logos and
+    //  screenshots). Max 5MB per file. No other file types.
+    //
+    //  TODO: replace ADMIN_EMAIL below with the real admin email
+    //  (the same email set as settings/config adminEmail).
+    //  Storage rules cannot read Firestore, so the admin email is
+    //  checked here as a literal. Keep it in sync with the admin
+    //  email in settings/config.
+    // ============================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // TODO-REPLACE-WITH-TOLIFYHUB-ADMIN-EMAIL
+    function isAdminEmail() {
+      return isSignedIn()
+        && request.auth.token.email == 'admin@tolifyhub.example';
+    }
+
+    // Store images (logo, account logos, screenshots): public to read
+    // (catalog images + login-page logo), admin-only to write/delete.
+    match /uploads/{fileName} {
+      allow read: if true;
+      allow write: if isAdminEmail()
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdminEmail();
+    }
+    match /uploads/{folder}/{fileName} {
+      allow read: if true;
+      allow write: if isAdminEmail()
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdminEmail();
+    }
+
+    // Profile photos: users/{uid}/profile_<timestamp>_<name>
+    match /users/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Everything else: deny.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
