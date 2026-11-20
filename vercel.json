@@ -1,1 +1,13 @@
-{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"admin.php":{"runtime":"vercel-php@0.7.3"},"index.php":{"runtime":"vercel-php@0.7.3"}}}
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "builds": [
+    {
+      "src": "index.php",
+      "use": "vercel-php@0.7.3"
+    },
+    {
+      "src": "admin.php",
+      "use": "vercel-php@0.7.3"
+    }
+  ]
+}
