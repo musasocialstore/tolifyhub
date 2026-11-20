@@ -135,6 +135,7 @@ export {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
+  setPersistence, browserLocalPersistence,
   collection, doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
   query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp,
   writeBatch, increment, arrayUnion, arrayRemove,
