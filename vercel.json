@@ -1,13 +1,1 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "builds": [
-    {
-      "src": "index.php",
-      "use": "vercel-php@0.7.3"
-    },
-    {
-      "src": "admin.php",
-      "use": "vercel-php@0.7.3"
-    }
-  ]
-}
+{"$schema":"https://openapi.vercel.sh/vercel.json","builds":[{"src":"index.php","use":"vercel-php@0.7.3"},{"src":"admin.php","use":"vercel-php@0.7.3"},{"src":"firebase.js","use":"@vercel/static"}]}
